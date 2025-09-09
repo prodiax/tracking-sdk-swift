@@ -406,7 +406,7 @@ public class ProdiaxSDK {
                 handleFailedBatch(originalEvents)
             }
         } catch {
-            error("Network error: \(error.localizedDescription)")
+            self.error("Network error: \(error.localizedDescription)")
             handleFailedBatch(originalEvents)
         }
     }
