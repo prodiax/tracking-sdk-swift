@@ -9,14 +9,15 @@ A comprehensive event tracking SDK for iOS applications with automatic tracking 
 
 ## 🚀 Features
 
-- **Automatic Screen Tracking** - Tracks screen views automatically
+- **Manual Screen Tracking** - Track screen views with simple API calls
 - **Session Management** - Handles user sessions with timeout logic  
 - **App State Tracking** - Monitors app foreground/background events
-- **Error Tracking** - Captures crashes and exceptions automatically
+- **Manual Error Tracking** - Track errors with custom error handling
 - **Network Resilience** - Batches events and retries failed requests
 - **Privacy First** - No PII collection, anonymous by default
 - **Lightweight** - Minimal performance impact
 - **Thread Safe** - All operations are thread-safe
+- **Crash Safe** - Removed problematic automatic features that could cause crashes
 
 ## 📦 Installation
 
@@ -63,9 +64,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         let config = ProdiaxConfig(
             productId: "your-product-id",
             debugMode: true, // Enable in development
-            enableAutomaticScreenTracking: true,
-            enableAutomaticAppStateTracking: true,
-            enableAutomaticErrorTracking: true
+            enableAutomaticAppStateTracking: true
         )
         
         ProdiaxSDK.shared.initialize(config: config)
@@ -88,7 +87,7 @@ struct MyApp: App {
         let config = ProdiaxConfig(
             productId: "your-product-id",
             debugMode: true,
-            enableAutomaticScreenTracking: true
+            enableAutomaticAppStateTracking: true
         )
         
         ProdiaxSDK.shared.initialize(config: config)
@@ -110,6 +109,9 @@ import ProdiaxSDK
 class ViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
+        
+        // Track screen view manually
+        ProdiaxSDK.shared.trackScreen("home", screenTitle: "Home Screen")
         
         // Track custom events
         ProdiaxSDK.shared.track("screen_loaded", properties: [
@@ -145,9 +147,7 @@ let config = ProdiaxConfig(
     apiEndpoint: "https://api.prodiax.com/track",    // Default API endpoint
     environment: .production,                        // .development or .production
     debugMode: false,                               // Enable debug logging
-    enableAutomaticScreenTracking: true,            // Auto-track screen views
     enableAutomaticAppStateTracking: true,          // Auto-track app state changes
-    enableAutomaticErrorTracking: true,             // Auto-track errors/crashes
     sessionTimeoutMs: 30 * 60 * 1000,              // 30 minutes session timeout
     maxSessionDurationMs: 24 * 60 * 60 * 1000,     // 24 hours max session
     batchSize: 20,                                  // Events per batch
@@ -176,4 +176,52 @@ await ProdiaxSDK.shared.flush()
 ProdiaxSDK.shared.reset()
 
 // Get current session info
-let session = ProdiaxSDK.
+let session = ProdiaxSDK.shared.getSession()
+
+// Get current screen info
+let currentScreen = ProdiaxSDK.shared.getCurrentScreen()
+```
+
+## 📱 Manual Screen Tracking
+
+Since automatic screen tracking was removed to prevent crashes, you need to manually track screen views:
+
+```swift
+// In your view controllers
+override func viewDidAppear(_ animated: Bool) {
+    super.viewDidAppear(animated)
+    
+    // Track screen view
+    ProdiaxSDK.shared.trackScreen("product_detail", screenTitle: "Product Detail", params: [
+        "product_id": "123",
+        "category": "electronics"
+    ])
+}
+
+// For SwiftUI
+struct ContentView: View {
+    var body: some View {
+        Text("Hello, World!")
+            .onAppear {
+                ProdiaxSDK.shared.trackScreen("content_view", screenTitle: "Content View")
+            }
+    }
+}
+```
+
+## 🚨 Error Tracking
+
+Track errors manually when they occur:
+
+```swift
+do {
+    // Your code that might throw
+    try riskyOperation()
+} catch {
+    // Track the error
+    ProdiaxSDK.shared.track("error_occurred", properties: [
+        "error_message": error.localizedDescription,
+        "error_type": "network_error",
+        "screen": "checkout"
+    ])
+}

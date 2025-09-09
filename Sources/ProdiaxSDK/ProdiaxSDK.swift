@@ -16,7 +16,7 @@ public struct ProdiaxConfig {
     public let batchSize: Int
     public let batchIntervalMs: Int
     
-    public enum Environment: String {
+    public enum Environment: String, CaseIterable {
         case development = "development"
         case production = "production"
     }
@@ -70,7 +70,7 @@ struct ProdiaxEvent: Codable {
     let eventId: String
     let timestamp: String
     let eventType: String
-    let data: [String: Any]
+    let data: [String: AnyCodable]
     
     private enum CodingKeys: String, CodingKey {
         case eventId = "event_id"
@@ -83,7 +83,7 @@ struct ProdiaxEvent: Codable {
         self.eventId = UUID().uuidString
         self.timestamp = ISO8601DateFormatter().string(from: Date())
         self.eventType = eventType
-        self.data = data
+        self.data = data.mapValues { AnyCodable($0) }
     }
     
     func encode(to encoder: Encoder) throws {
@@ -91,7 +91,7 @@ struct ProdiaxEvent: Codable {
         try container.encode(eventId, forKey: .eventId)
         try container.encode(timestamp, forKey: .timestamp)
         try container.encode(eventType, forKey: .eventType)
-        try container.encode(data.compactMapValues { $0 as? Codable }, forKey: .data)
+        try container.encode(data, forKey: .data)
     }
     
     init(from decoder: Decoder) throws {
@@ -100,7 +100,6 @@ struct ProdiaxEvent: Codable {
         timestamp = try container.decode(String.self, forKey: .timestamp)
         eventType = try container.decode(String.self, forKey: .eventType)
         data = try container.decode([String: AnyCodable].self, forKey: .data)
-            .mapValues { $0.value }
     }
 }
 
@@ -124,6 +123,12 @@ struct AnyCodable: Codable {
             try container.encode(double)
         case let bool as Bool:
             try container.encode(bool)
+        case let array as [Any]:
+            try container.encode(array.map { AnyCodable($0) })
+        case let dict as [String: Any]:
+            try container.encode(dict.mapValues { AnyCodable($0) })
+        case is NSNull:
+            try container.encodeNil()
         default:
             try container.encode(String(describing: value))
         }
@@ -132,7 +137,9 @@ struct AnyCodable: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         
-        if let string = try? container.decode(String.self) {
+        if container.decodeNil() {
+            value = NSNull()
+        } else if let string = try? container.decode(String.self) {
             value = string
         } else if let int = try? container.decode(Int.self) {
             value = int
@@ -140,6 +147,10 @@ struct AnyCodable: Codable {
             value = double
         } else if let bool = try? container.decode(Bool.self) {
             value = bool
+        } else if let array = try? container.decode([AnyCodable].self) {
+            value = array.map { $0.value }
+        } else if let dict = try? container.decode([String: AnyCodable].self) {
+            value = dict.mapValues { $0.value }
         } else {
             throw DecodingError.typeMismatch(
                 AnyCodable.self,
@@ -171,11 +182,18 @@ public class ProdiaxSDK {
     private var isOnline = true
     
     private let queue = DispatchQueue(label: "com.prodiax.sdk", qos: .background)
+    private let sessionQueue = DispatchQueue(label: "com.prodiax.sdk.session", qos: .background)
+    
+    // Thread-safe access to shared state
+    private let stateLock = NSLock()
     
     private init() {}
     
     // MARK: - Public API
     public func initialize(config: ProdiaxConfig) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        
         guard !isInitialized else {
             log("SDK already initialized.")
             return
@@ -195,8 +213,9 @@ public class ProdiaxSDK {
         startNewSession()
         trackAppStart()
         setupAppStateTracking()
-        setupErrorTracking()
-        setupScreenTracking()
+        // Remove automatic error tracking and screen tracking to prevent crashes
+        // setupErrorTracking()
+        // setupScreenTracking()
         
         log("Prodiax SDK initialization complete")
     }
@@ -248,6 +267,9 @@ public class ProdiaxSDK {
     }
     
     public func reset() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        
         eventQueue.removeAll()
         failedEvents.removeAll()
         batchTimer?.invalidate()
@@ -258,6 +280,9 @@ public class ProdiaxSDK {
     }
     
     public func getSession() -> [String: Any]? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        
         guard let session = currentSession else { return nil }
         
         return [
@@ -270,6 +295,9 @@ public class ProdiaxSDK {
     }
     
     public func getCurrentScreen() -> [String: Any]? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        
         return currentScreen
     }
     
@@ -289,6 +317,9 @@ public class ProdiaxSDK {
         
         queue.async { [weak self] in
             guard let self = self else { return }
+            
+            self.stateLock.lock()
+            defer { self.stateLock.unlock() }
             
             if !["session_start", "session_end"].contains(eventType) {
                 self.checkSession()
@@ -318,9 +349,12 @@ public class ProdiaxSDK {
         }
     }
     
-    @MainActor
     private func sendBatch() async {
-        guard !eventQueue.isEmpty, let config = config else { return }
+        stateLock.lock()
+        guard !eventQueue.isEmpty, let config = config else { 
+            stateLock.unlock()
+            return 
+        }
         
         let payload: [String: Any] = [
             "productId": config.productId,
@@ -334,13 +368,14 @@ public class ProdiaxSDK {
                     "event_id": event.eventId,
                     "timestamp_utc": event.timestamp,
                     "event_type": event.eventType,
-                    "data": event.data
+                    "data": event.data.mapValues { $0.value }
                 ]
             }
         ]
         
         let eventsToSend = eventQueue
         eventQueue.removeAll()
+        stateLock.unlock()
         
         log("Sending batch with \(eventsToSend.count) events")
         await sendData(payload: payload, originalEvents: eventsToSend)
@@ -400,6 +435,9 @@ public class ProdiaxSDK {
     
     // MARK: - Session Management
     private func startNewSession() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        
         if currentSession != nil {
             endCurrentSession()
         }
@@ -506,40 +544,8 @@ public class ProdiaxSDK {
         )
     }
     
-    private func setupErrorTracking() {
-        guard config?.enableAutomaticErrorTracking == true else { return }
-        
-        NSSetUncaughtExceptionHandler { [weak self] exception in
-            self?.handleError(
-                message: exception.reason ?? "Unknown exception",
-                stack: exception.callStackSymbols.joined(separator: "\n"),
-                type: exception.name.rawValue
-            )
-        }
-        
-        log("Automatic error tracking enabled")
-    }
-    
-    private func setupScreenTracking() {
-        guard config?.enableAutomaticScreenTracking == true else { return }
-        
-        // Swizzle viewDidAppear to automatically track screen views
-        swizzleViewDidAppear()
-        
-        log("Automatic screen tracking enabled")
-    }
-    
-    private func swizzleViewDidAppear() {
-        let originalSelector = #selector(UIViewController.viewDidAppear(_:))
-        let swizzledSelector = #selector(UIViewController.prodiax_viewDidAppear(_:))
-        
-        guard let originalMethod = class_getInstanceMethod(UIViewController.self, originalSelector),
-              let swizzledMethod = class_getInstanceMethod(UIViewController.self, swizzledSelector) else {
-            return
-        }
-        
-        method_exchangeImplementations(originalMethod, swizzledMethod)
-    }
+    // Removed automatic error tracking and screen tracking to prevent crashes
+    // These features can be enabled manually by the developer if needed
     
     private func handleError(message: String, stack: String? = nil, type: String = "Error") {
         trackEvent(
@@ -653,15 +659,8 @@ public class ProdiaxSDK {
 }
 
 // MARK: - UIViewController Extension for Automatic Screen Tracking
-extension UIViewController {
-    @objc func prodiax_viewDidAppear(_ animated: Bool) {
-        prodiax_viewDidAppear(animated) // Call original implementation
-        
-        // Track screen view automatically
-        let screenName = String(describing: type(of: self))
-        ProdiaxSDK.shared.trackScreen(screenName)
-    }
-}
+// Removed automatic screen tracking extension to prevent crashes
+// Developers can manually call trackScreen() when needed
 
 // MARK: - UIDevice Extension
 extension UIDevice {

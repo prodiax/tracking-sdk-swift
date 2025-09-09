@@ -6,7 +6,8 @@ import PackageDescription
 let package = Package(
     name: "ProdiaxSDK",
     platforms: [
-        .iOS(.v13)
+        .iOS(.v13),
+        .macOS(.v10_15)
     ],
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
@@ -24,7 +25,17 @@ let package = Package(
         .target(
             name: "ProdiaxSDK",
             dependencies: [],
-            path: "Sources/ProdiaxSDK"
+            path: "Sources/ProdiaxSDK",
+            linkerSettings: [
+                .linkedFramework("Foundation"),
+                .linkedFramework("UIKit"),
+                .linkedFramework("Network")
+            ]
+        ),
+        .testTarget(
+            name: "ProdiaxSDKTests",
+            dependencies: ["ProdiaxSDK"],
+            path: "Tests/ProdiaxSDKTests"
         ),
     ],
     swiftLanguageVersions: [.v5]
